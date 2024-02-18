@@ -1,5 +1,5 @@
 """
- Copyright 2016, 2018 John J. Rofrano. All Rights Reserved.
+ Copyright 2016, 2024 John J. Rofrano. All Rights Reserved.
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -13,10 +13,6 @@
  See the License for the specific language governing permissions and
  limitations under the License.
 """
-# Test cases can be run with any of the following:
-# coverage report -m --include=service.py
-# nosetests -v --rednose --with-coverage --cover-package=service
-
 import unittest
 import json
 from base64 import b64encode
@@ -29,39 +25,41 @@ class TestPetServer(unittest.TestCase):
 
     def setUp(self):
         service.app.debug = True
-        self.app = service.app.test_client()
-        service.API_USERNAME = "tester"
-        service.API_PASSWORD = "s3cr3t"
+        self.client = service.app.test_client()
         self.headers = {
-            'Authorization': 'Basic %s' % \
-            b64encode(b'{}:{}'.format(service.API_USERNAME, service.API_PASSWORD))
+            'Authorization': 'Basic {}'.format(self._get_auth_header())
         }
 
+    def _get_auth_header(self):
+        service.API_USERNAME = "tester"
+        service.API_PASSWORD = "s3cr3t"
+        return b64encode(f'{service.API_USERNAME}:{service.API_PASSWORD}'.encode()).decode()
+
     def login(self):
-        resp = self.app.get('/login', headers=self.headers)
+        resp = self.client.get('/login', headers=self.headers)
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(len(resp.data) > 0)
         data = json.loads(resp.data)
         return data['token']
 
     def test_index(self):
-        """ Test the home page which is not protected """
-        resp = self.app.get('/')
+        """ Is should return the home page which is not protected """
+        resp = self.client.get('/')
         self.assertEqual(resp.status_code, 200)
-        self.assertTrue('Example Flask JWT Demo' in resp.data)
+        self.assertTrue('Example Flask JWT Demo' in str(resp.data))
 
     def test_not_authorized(self):
-        """ Test call that is not autorized """
-        resp = self.app.get('/hello')
+        """ Is should fail for call that is not authorized """
+        resp = self.client.get('/hello')
         self.assertEqual(resp.status_code, 401)
 
     def test_say_hello(self):
-        """ Test call with autorization """
+        """ Is should succeed for call with authorization """
         token = self.login()
         headers = {
             'Authorization': 'Bearer %s' % token
         }
-        resp = self.app.get('/hello', headers=headers)
+        resp = self.client.get('/hello', headers=headers)
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(len(resp.data) > 0)
         data = json.loads(resp.data)

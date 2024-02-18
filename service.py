@@ -1,5 +1,5 @@
 """
- Copyright 2016, 2018 John J. Rofrano. All Rights Reserved.
+ Copyright 2016, 2024 John J. Rofrano. All Rights Reserved.
 
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -15,36 +15,44 @@
 """
 import os
 import jwt
-import datetime
+import status
+from datetime import datetime, timedelta
 from functools import wraps
-from flask import Flask, request, Response, jsonify, abort, url_for
+from flask import Flask, request, make_response, jsonify, abort, url_for
 
 # Get global variables from the environment
-DEBUG = (os.getenv('DEBUG', 'False') == 'True')
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 PORT = int(os.getenv('PORT', '5000'))
-HOST = str(os.getenv('VCAP_APP_HOST', '0.0.0.0'))
+HOST = str(os.getenv('HOST', '0.0.0.0'))
 
 # get secrets from the environment
-API_USERNAME = os.getenv('API_USERNAME', None)
-API_PASSWORD = os.getenv('API_PASSWORD', None)
+API_USERNAME = os.getenv('API_USERNAME')
+API_PASSWORD = os.getenv('API_PASSWORD')
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', None)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 
 ######################################################################
 # HTTP Error Handlers
 ######################################################################
-@app.errorhandler(401)
-def not_authorized(e):
+@app.errorhandler(status.HTTP_401_NOT_AUTHORIZED)
+def not_authorized(error):
     """ Sends a 401 response that enables basic auth """
-    app.logger.info('Sending 401 authentication request')
-    return Response(
-    'Could not verify your access level for that URL.\n'
-    'You have to login with proper credentials', 401,
-    {'WWW-Authenticate': 'Basic realm="Login Required"'})
+    message = str(error)
+    app.logger.warning("401 Unauthorized: %s", message)
+    return make_response(
+        jsonify(
+            status=status.HTTP_401_NOT_AUTHORIZED, 
+            error="Could not verify your credentials for that URL.", 
+            message=message
+        ),
+        status.HTTP_401_NOT_AUTHORIZED,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    )
+
 
 ######################################################################
-# Check Auth: Add your autorization code here
+# Check Auth: Add your authorization code here
 ######################################################################
 def check_auth(auth):
     """ Checks the environment that the user is correct """
@@ -53,28 +61,30 @@ def check_auth(auth):
     return False
 
 ######################################################################
-# Token Required: Decorator function to add secuity to any call
+# Token Required: Decorator function to add security to any call
 ######################################################################
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = None
-        #print request.headers
-        if 'Authorization' in request.headers:
-            bearer_token = request.headers.get('Authorization')
-            if bearer_token.startswith("Bearer "):
-                token = bearer_token.split("Bearer ")[1]
-
+        token = request.headers.get('Authorization')
         if not token:
-            return jsonify(message='Token is missing!'), 401
+            return jsonify({'message': 'Token is missing!'}), status.HTTP_401_NOT_AUTHORIZED
 
         try:
-            data = jwt.decode(token, app.config['SECRET_KEY'])
-            current_user = data['username']
-        except:
-            return jsonify(message='Token is invalid!'), 401
+            if token.startswith("Bearer "):
+                token = token.split("Bearer ")[1]
+            # Decoding the token
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = data['sub']
+
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Token has expired!'}), status.HTTP_401_NOT_AUTHORIZED
+        except jwt.InvalidTokenError:
+            return jsonify({'message': 'Invalid token!'}), status.HTTP_401_NOT_AUTHORIZED
+
         return f(current_user, *args, **kwargs)
     return decorated
+
 
 ######################################################################
 # GET /
@@ -84,7 +94,7 @@ def index():
     """ Home page which is not protected """
     return jsonify(message='Example Flask JWT Demo',
                    url=url_for('say_hello', _external=True),
-                   version='1.0'), 200
+                   version='1.0'), status.HTTP_200_OK
 
 ######################################################################
 # GET /pets
@@ -93,7 +103,7 @@ def index():
 @token_required
 def say_hello(current_user):
     """ Call to get Pets which is protected by API key """
-    return jsonify(hello=current_user), 200
+    return jsonify(hello=current_user), status.HTTP_200_OK
 
 
 ######################################################################
@@ -103,17 +113,19 @@ def say_hello(current_user):
 def login():
     auth = request.authorization
     if not auth or not auth.username or not auth.password:
-        abort(401)
+        abort(status.HTTP_401_NOT_AUTHORIZED)
 
     if check_auth(auth):
         payload = {
-            'username': auth.username,
-            'exp' : datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
+            'sub': auth.username,
+            'iat': datetime.utcnow(),
+            'exp': datetime.utcnow() + timedelta(minutes=60)
         }
-        token = jwt.encode(payload, app.config['SECRET_KEY'])
-        return jsonify({'token': token.decode('UTF-8')})
+        token = jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
+        return jsonify({'token': token})
 
-    abort(401)
+    abort(status.HTTP_401_NOT_AUTHORIZED)
+
 
 ######################################################################
 #  M A I N   P R O G R A M
